@@ -16,6 +16,7 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
+  bool playInterrupted = false;
   final _player = ja.AudioPlayer(
     // Handle audio_session events ourselves for the purpose of this demo.
     handleInterruptions: false,
@@ -34,8 +35,7 @@ class _MyAppState extends State<MyApp> {
       // Listen to audio interruptions and pause or duck as appropriate.
       _handleInterruptions(audioSession);
       // Use another plugin to load audio to play.
-      await _player.setUrl(
-          "https://s3.amazonaws.com/scifri-episodes/scifri20181123-episode.mp3");
+      await _player.setUrl("https://s3.amazonaws.com/scifri-episodes/scifri20181123-episode.mp3");
     });
   }
 
@@ -44,14 +44,15 @@ class _MyAppState extends State<MyApp> {
     // order to demonstrate manual configuration.
     bool playInterrupted = false;
     audioSession.becomingNoisyEventStream.listen((_) {
-      debugPrint('PAUSE');
+      debugPrint('becoming noisy - PAUSE');
       _player.pause();
     });
     _player.playingStream.listen((playing) {
       playInterrupted = false;
       if (playing) {
         audioSession.setActive(true);
-      }
+      } else
+        audioSession.setActive(false); //allows other apps to unduck.
     });
     audioSession.interruptionEventStream.listen((event) {
       debugPrint('interruption begin: ${event.begin}');
@@ -59,8 +60,7 @@ class _MyAppState extends State<MyApp> {
       if (event.begin) {
         switch (event.type) {
           case AudioInterruptionType.duck:
-            if (audioSession.androidAudioAttributes!.usage ==
-                AndroidAudioUsage.game) {
+            if (audioSession.androidAudioAttributes!.usage == AndroidAudioUsage.game) {
               _player.setVolume(_player.volume / 2);
             }
             playInterrupted = false;
@@ -69,7 +69,9 @@ class _MyAppState extends State<MyApp> {
           case AudioInterruptionType.unknown:
             if (_player.playing) {
               _player.pause();
-              playInterrupted = true;
+              setState(() {
+                playInterrupted = true;
+              });
             }
             break;
         }
@@ -77,14 +79,26 @@ class _MyAppState extends State<MyApp> {
         switch (event.type) {
           case AudioInterruptionType.duck:
             _player.setVolume(min(1.0, _player.volume * 2));
-            playInterrupted = false;
+            if (playInterrupted) {
+              setState(() {
+                playInterrupted = false;
+              });
+            }
             break;
           case AudioInterruptionType.pause:
-            if (playInterrupted) _player.play();
-            playInterrupted = false;
+            if (playInterrupted) {
+              _player.play();
+              setState(() {
+                playInterrupted = false;
+              });
+            }
             break;
           case AudioInterruptionType.unknown:
-            playInterrupted = false;
+            if (playInterrupted) {
+              setState(() {
+                playInterrupted = false;
+              });
+            }
             break;
         }
       }
@@ -112,8 +126,7 @@ class _MyAppState extends State<MyApp> {
                     stream: _player.playerStateStream,
                     builder: (context, snapshot) {
                       final playerState = snapshot.data;
-                      if (playerState?.processingState !=
-                          ja.ProcessingState.ready) {
+                      if (playerState?.processingState != ja.ProcessingState.ready) {
                         return Container(
                           margin: EdgeInsets.all(8.0),
                           width: 64.0,
@@ -150,16 +163,12 @@ class _MyAppState extends State<MyApp> {
                         return Column(
                           crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
-                            Text("Input devices",
-                                style: Theme.of(context).textTheme.titleLarge),
-                            for (var device
-                                in devices.where((device) => device.isInput))
+                            Text("Input devices", style: Theme.of(context).textTheme.titleLarge),
+                            for (var device in devices.where((device) => device.isInput))
                               Text('${device.name} (${device.type.name})'),
                             SizedBox(height: 16),
-                            Text("Output devices",
-                                style: Theme.of(context).textTheme.titleLarge),
-                            for (var device
-                                in devices.where((device) => device.isOutput))
+                            Text("Output devices", style: Theme.of(context).textTheme.titleLarge),
+                            for (var device in devices.where((device) => device.isOutput))
                               Text('${device.name} (${device.type.name})'),
                           ],
                         );
