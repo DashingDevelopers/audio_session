@@ -51,8 +51,15 @@ class _MyAppState extends State<MyApp> {
       playInterrupted = false;
       if (playing) {
         audioSession.setActive(true);
-      } else
-        audioSession.setActive(false); //allows other apps to unduck.
+      } else {
+        Future.delayed(Duration(seconds: 2), () async {
+          //older iOS devices don't have time for the AVplayer to release the audio session, so this 2 second delay is needed for those devices
+          //similar situation to an old bug relating to deactivating a stopped audio session
+          //error output:
+          //[ERROR:flutter/runtime/dart_vm_initializer.cc(41)] Unhandled Exception: PlatformException(560030580, The operation couldn’t be completed. (OSStatus error 560030580.), null, null)
+          await audioSession.setActive(false);
+        });
+      }
     });
     audioSession.interruptionEventStream.listen((event) {
       debugPrint('interruption begin: ${event.begin}');
