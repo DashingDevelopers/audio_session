@@ -1,22 +1,31 @@
+import 'dart:io';
 import 'dart:math';
 
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart' as ja;
 
+/*
+
+This example demonstrates how to use the audio_session package to experiment the audio session for different use cases.
+And to make sure ducking etc works as expected.
+
+See  the enum ASConfig at the end of this file for the different configurations that can be tested & extended
+
+ */
 void main() {
-  runApp(const MyApp());
+  runApp(const ConfigExperiementsExample());
 }
 
-class MyApp extends StatefulWidget {
-  const MyApp({super.key});
+class ConfigExperiementsExample extends StatefulWidget {
+  const ConfigExperiementsExample({super.key});
 
   @override
-  State<MyApp> createState() => _MyAppState();
+  State<ConfigExperiementsExample> createState() => _ConfigExperiementsExampleState();
 }
 
-class _MyAppState extends State<MyApp> {
-  bool playInterrupted = false;
+class _ConfigExperiementsExampleState extends State<ConfigExperiementsExample> {
+  bool playInterruptedByExternalInterruption = false;
   final _player = ja.AudioPlayer(
     // Handle audio_session events ourselves for the purpose of this demo.
     handleInterruptions: false,
@@ -24,7 +33,7 @@ class _MyAppState extends State<MyApp> {
     handleAudioSessionActivation: false,
   );
 
-  ASConfig _selectedConfiguration = ASConfig.app_event;
+  ASConfig _selectedConfiguration = ASConfig.app_event_alarm;
 
   double outputVolume = 0.5;
 
@@ -49,13 +58,31 @@ class _MyAppState extends State<MyApp> {
     });
     _player.playingStream.listen((playing) {
       if (playing) {
-        if (_selectedConfiguration.requestsFocus) audioSession.setActive(true);
-        if (playInterrupted) {
+        if (_selectedConfiguration.requestsActiveFocus) {
+          audioSession.setActive(true);
+        }
+        if (playInterruptedByExternalInterruption) {
           setState(() {
-            playInterrupted = false;
+            playInterruptedByExternalInterruption = false;
           });
         }
-      } else if (_selectedConfiguration.requestsFocus) audioSession.setActive(false);
+        //else not playing
+      } else if (_selectedConfiguration.requestsActiveFocus) {
+        //if this audio session has requested focus, and therefor ducked others, then deactivate the session
+        //this may not be desired behaviour for all apps
+        bool shouldDeactivateInAndroidOnPause = false;
+        if (Platform.isAndroid) {
+          audioSession.setActive(false);
+        } else {
+          Future.delayed(Duration(seconds: 2), () async {
+            //older iOS devices don't have time for the AVplayer to release the audio session, so this 2 second delay is needed for those devices
+            //similar situation to an old bug relating to deactivating a stopped audio session
+            //error output:
+            //[ERROR:flutter/runtime/dart_vm_initializer.cc(41)] Unhandled Exception: PlatformException(560030580, The operation couldn’t be completed. (OSStatus error 560030580.), null, null)
+            await audioSession.setActive(false);
+          });
+        }
+      }
     });
     audioSession.interruptionEventStream.listen((event) {
       if (event.begin) {
@@ -70,7 +97,7 @@ class _MyAppState extends State<MyApp> {
             if (_player.playing) {
               _player.pause();
               setState(() {
-                playInterrupted = true;
+                playInterruptedByExternalInterruption = true;
               });
             }
             break;
@@ -81,17 +108,17 @@ class _MyAppState extends State<MyApp> {
             _player.setVolume(min(1.0, _player.volume * 2));
             break;
           case AudioInterruptionType.pause:
-            if (playInterrupted) {
+            if (playInterruptedByExternalInterruption) {
               _player.play();
               setState(() {
-                playInterrupted = false;
+                playInterruptedByExternalInterruption = false;
               });
             }
             break;
           case AudioInterruptionType.unknown:
-            if (playInterrupted) {
+            if (playInterruptedByExternalInterruption) {
               setState(() {
-                playInterrupted = false;
+                playInterruptedByExternalInterruption = false;
               });
             }
             break;
@@ -110,7 +137,7 @@ class _MyAppState extends State<MyApp> {
     return MaterialApp(
       home: Scaffold(
         appBar: AppBar(
-          title: const Text('audio_session example'),
+          title: const Text('audio_session config experiments'),
         ),
         body: SafeArea(
           child: Column(
@@ -154,17 +181,30 @@ class _MyAppState extends State<MyApp> {
                           child: CircularProgressIndicator(),
                         );
                       } else if (playerState?.playing == true) {
-                        return IconButton(
-                          icon: Icon(Icons.pause),
-                          iconSize: 64.0,
-                          onPressed: _player.pause,
+                        return Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            IconButton(
+                              icon: Icon(Icons.pause),
+                              iconSize: 64.0,
+                              onPressed: _player.pause,
+                            ),
+                            IconButton(
+                                icon: Icon(Icons.stop),
+                                iconSize: 64.0,
+                                onPressed: () async {
+                                  await _player.stop();
+                                  //reset the player session config and audio session so that it can be played again
+                                  _initializeAudioSession();
+                                }),
+                          ],
                         );
                       } else {
                         return IconButton(
-                          icon: Icon(Icons.play_arrow, color: playInterrupted ? Colors.red : null),
-                          iconSize: 64.0,
-                          onPressed: _player.play,
-                        );
+                            icon: Icon(Icons.play_arrow,
+                                color: playInterruptedByExternalInterruption ? Colors.red : null),
+                            iconSize: 64.0,
+                            onPressed: _player.play);
                       }
                     },
                   ),
@@ -184,7 +224,10 @@ class _MyAppState extends State<MyApp> {
               Center(
                 child: Padding(
                   padding: const EdgeInsets.all(8.0),
-                  child: Text('is play interrupted?: $playInterrupted'),
+                  child: Text(
+                    'is play interrupted from other app?: $playInterruptedByExternalInterruption',
+                    style: TextStyle(color: Colors.purple),
+                  ),
                 ),
               ),
               Expanded(
@@ -223,14 +266,17 @@ class _MyAppState extends State<MyApp> {
 }
 
 enum ASConfig {
-  app_event(requestsFocus: false), //TODO could go in core @Ryan?
-  tts_voice_over(requestsFocus: true),
-  music(requestsFocus: true),
-  speech(requestsFocus: true);
+  app_event_alarm(requestsActiveFocus: false),//audio to be mixed with external apps audio
+  tts_voice_over(requestsActiveFocus: true),//external apps audio to be ducked
+  music(requestsActiveFocus: true),//external apps audio to be stopped/paused
+  speech(requestsActiveFocus: true);//external apps audio to be stopped/paused
 
-  final bool requestsFocus;
+  final bool
+      requestsActiveFocus;  //if true, external app playing audio that handle events will be
+                      // ducked, paused or stopped whilst this is playing, and unducked or resumed when this apps audio
+                      // is stopped or paused
 
-  const ASConfig({required bool this.requestsFocus});
+  const ASConfig({required bool this.requestsActiveFocus});
 
   AudioSessionConfiguration get configuration {
     switch (this) {
@@ -238,36 +284,37 @@ enum ASConfig {
         return AudioSessionConfiguration.music();
       case speech:
         return AudioSessionConfiguration.speech();
-      case ASConfig.app_event:
+      case ASConfig.app_event_alarm:
         return AudioSessionConfiguration(
+          //ios
           avAudioSessionCategory: AVAudioSessionCategory.playback,
           avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.mixWithOthers,
           avAudioSessionMode: AVAudioSessionMode.defaultMode,
           avAudioSessionRouteSharingPolicy: AVAudioSessionRouteSharingPolicy.defaultPolicy,
           avAudioSessionSetActiveOptions: AVAudioSessionSetActiveOptions.notifyOthersOnDeactivation,
-          // androidAudioFocusGainType: AndroidAudioFocusGainType.gain, //gain ignored as focus not requested
+          //android
+          // androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+          //note - default gain is effectively ignored as app_event_alarm will not request active focus
           androidWillPauseWhenDucked: false,
           androidAudioAttributes: AndroidAudioAttributes(
             contentType: AndroidAudioContentType.sonification,
-            usage: AndroidAudioUsage.alarm, //or alarm ( try DND)
-            // usage: AndroidAudioUsage.assistanceSonification, //or alarm ( try DND)
+            usage: AndroidAudioUsage.alarm,
+            // usage: AndroidAudioUsage.assistanceSonification,//may be more appropriate than alarm
           ),
         );
 
-      //for apple, change the session config depending on sound type (i guess ducking is fine during TTS as the alarm will not be affected)
       case ASConfig.tts_voice_over:
         return AudioSessionConfiguration(
+          //ios
           avAudioSessionCategory: AVAudioSessionCategory.ambient,
+          //AVAudioSessionCategoryOptions mixWithOthers for background non vocal music
+          //AVAudioSessionCategoryOptions duckOthers for background music with lyrics
           avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.duckOthers,
-          //AVAudioSessionCategoryOptions mixwithothers wont sound good for music with lyrics, possibly have this as an option for no vocal music
           avAudioSessionMode: AVAudioSessionMode.spokenAudio,
-
           avAudioSessionRouteSharingPolicy: AVAudioSessionRouteSharingPolicy.defaultPolicy,
           avAudioSessionSetActiveOptions: AVAudioSessionSetActiveOptions.notifyOthersOnDeactivation,
 
           androidAudioFocusGainType: AndroidAudioFocusGainType.gainTransientMayDuck,
-          //ignored as focus not requested
-
           androidWillPauseWhenDucked: true,
           androidAudioAttributes: AndroidAudioAttributes(
             contentType: AndroidAudioContentType.speech,
