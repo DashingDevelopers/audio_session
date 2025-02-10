@@ -266,15 +266,14 @@ class _ConfigExperiementsExampleState extends State<ConfigExperiementsExample> {
 }
 
 enum ASConfig {
-  app_event_alarm(requestsActiveFocus: false),//audio to be mixed with external apps audio
-  tts_voice_over(requestsActiveFocus: true),//external apps audio to be ducked
-  music(requestsActiveFocus: true),//external apps audio to be stopped/paused
-  speech(requestsActiveFocus: true);//external apps audio to be stopped/paused
+  app_event_alarm(requestsActiveFocus: false), //audio to be mixed with external apps audio
+  tts_voice_over(requestsActiveFocus: true), //external apps audio to be ducked
+  music(requestsActiveFocus: true), //external apps audio to be stopped/paused
+  speech(requestsActiveFocus: true); //external apps audio to be stopped/paused
 
-  final bool
-      requestsActiveFocus;  //if true, external app playing audio that handle events will be
-                      // ducked, paused or stopped whilst this is playing, and unducked or resumed when this apps audio
-                      // is stopped or paused
+  final bool requestsActiveFocus; //if true, external app playing audio that handle events will be
+  // ducked, paused or stopped whilst this is playing, and unducked or resumed when this apps audio
+  // is stopped or paused
 
   const ASConfig({required bool this.requestsActiveFocus});
 
