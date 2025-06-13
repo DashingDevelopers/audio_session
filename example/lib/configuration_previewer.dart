@@ -12,6 +12,8 @@ And to make sure ducking etc works as expected.
 
 See  the enum ASConfig at the end of this file for the different configurations that can be tested & extended
 
+This also has enhanced controls to show when audio has been paused by external event by coloring the play button red.
+
  */
 void main() {
   runApp(const ConfigExperiementsExample());
@@ -25,7 +27,7 @@ class ConfigExperiementsExample extends StatefulWidget {
 }
 
 class _ConfigExperiementsExampleState extends State<ConfigExperiementsExample> {
-  bool playInterruptedByExternalInterruption = false;
+  bool interruptedByInterruptionEventStream = false;
   final _player = ja.AudioPlayer(
     // Handle audio_session events ourselves for the purpose of this demo.
     handleInterruptions: false,
@@ -33,7 +35,7 @@ class _ConfigExperiementsExampleState extends State<ConfigExperiementsExample> {
     handleAudioSessionActivation: false,
   );
 
-  ASConfig _selectedConfiguration = ASConfig.app_event_alarm;
+  ASConfig _selectedConfiguration = ASConfig.no_focus_example;
 
   double outputVolume = 0.5;
 
@@ -56,14 +58,15 @@ class _ConfigExperiementsExampleState extends State<ConfigExperiementsExample> {
       debugPrint('becoming noisy - PAUSE');
       _player.pause();
     });
+
     _player.playingStream.listen((playing) {
       if (playing) {
         if (_selectedConfiguration.requestsActiveFocus) {
           audioSession.setActive(true);
         }
-        if (playInterruptedByExternalInterruption) {
+        if (interruptedByInterruptionEventStream) {
           setState(() {
-            playInterruptedByExternalInterruption = false;
+            interruptedByInterruptionEventStream = false;
           });
         }
         //else not playing
@@ -72,8 +75,12 @@ class _ConfigExperiementsExampleState extends State<ConfigExperiementsExample> {
         //this may not be desired behaviour for all apps
         bool shouldDeactivateInAndroidOnPause = false;
         if (Platform.isAndroid) {
+          debugPrint('deactivating audiosession');
+
           audioSession.setActive(false);
         } else {
+          debugPrint('deactivating audiosession in 2 seconds');
+
           Future.delayed(Duration(seconds: 2), () async {
             //older iOS devices don't have time for the AVplayer to release the audio session, so this 2 second delay is needed for those devices
             //similar situation to an old bug relating to deactivating a stopped audio session in audio service - https://github.com/ryanheise/audio_service/issues/672
@@ -84,7 +91,9 @@ class _ConfigExperiementsExampleState extends State<ConfigExperiementsExample> {
         }
       }
     });
+
     audioSession.interruptionEventStream.listen((event) {
+      debugPrint('interruptionEventStream event: ${event.begin ? 'begin' : 'end'} type: ${event.type}');
       if (event.begin) {
         switch (event.type) {
           case AudioInterruptionType.duck:
@@ -97,7 +106,7 @@ class _ConfigExperiementsExampleState extends State<ConfigExperiementsExample> {
             if (_player.playing) {
               _player.pause();
               setState(() {
-                playInterruptedByExternalInterruption = true;
+                interruptedByInterruptionEventStream = true;
               });
             }
             break;
@@ -108,17 +117,17 @@ class _ConfigExperiementsExampleState extends State<ConfigExperiementsExample> {
             _player.setVolume(min(1.0, _player.volume * 2));
             break;
           case AudioInterruptionType.pause:
-            if (playInterruptedByExternalInterruption) {
+            if (interruptedByInterruptionEventStream) {
               _player.play();
               setState(() {
-                playInterruptedByExternalInterruption = false;
+                interruptedByInterruptionEventStream = false;
               });
             }
             break;
           case AudioInterruptionType.unknown:
-            if (playInterruptedByExternalInterruption) {
+            if (interruptedByInterruptionEventStream) {
               setState(() {
-                playInterruptedByExternalInterruption = false;
+                interruptedByInterruptionEventStream = false;
               });
             }
             break;
@@ -160,8 +169,10 @@ class _ConfigExperiementsExampleState extends State<ConfigExperiementsExample> {
                         setState(() {
                           _selectedConfiguration = value;
                         });
-                        final audioSession = await AudioSession.instance;
-                        await audioSession.configure(_selectedConfiguration.configuration);
+
+                        _initializeAudioSession(); //reinitialize the audio session with the new listener configuration
+                        // final audioSession = await AudioSession.instance;
+                        // await audioSession.configure(_selectedConfiguration.configuration);
                       }
                     },
                   ),
@@ -173,38 +184,17 @@ class _ConfigExperiementsExampleState extends State<ConfigExperiementsExample> {
                     stream: _player.playerStateStream,
                     builder: (context, snapshot) {
                       final playerState = snapshot.data;
-                      if (playerState?.processingState != ja.ProcessingState.ready) {
-                        return Container(
-                          margin: EdgeInsets.all(8.0),
-                          width: 64.0,
-                          height: 64.0,
-                          child: CircularProgressIndicator(),
-                        );
+
+                      if (playerState?.processingState == ja.ProcessingState.buffering ||
+                          playerState?.processingState == ja.ProcessingState.loading) {
+                        return PlayerLoading();
                       } else if (playerState?.playing == true) {
-                        return Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            IconButton(
-                              icon: Icon(Icons.pause),
-                              iconSize: 64.0,
-                              onPressed: _player.pause,
-                            ),
-                            IconButton(
-                                icon: Icon(Icons.stop),
-                                iconSize: 64.0,
-                                onPressed: () async {
-                                  await _player.stop();
-                                  //reset the player session config and audio session so that it can be played again
-                                  _initializeAudioSession();
-                                }),
-                          ],
-                        );
+                        return PlayerPlaying(player: _player);
                       } else {
-                        return IconButton(
-                            icon: Icon(Icons.play_arrow,
-                                color: playInterruptedByExternalInterruption ? Colors.red : null),
-                            iconSize: 64.0,
-                            onPressed: _player.play);
+                        print('playerState?.processingState ${playerState?.processingState}');
+                        return PlayerReady(
+                            interruptedByInterruptionEventStream: interruptedByInterruptionEventStream,
+                            player: _player);
                       }
                     },
                   ),
@@ -225,7 +215,7 @@ class _ConfigExperiementsExampleState extends State<ConfigExperiementsExample> {
                 child: Padding(
                   padding: const EdgeInsets.all(8.0),
                   child: Text(
-                    'is play interrupted from other app?: $playInterruptedByExternalInterruption',
+                    'Interrupted from interruptionEventStream?: $interruptedByInterruptionEventStream',
                     style: TextStyle(color: Colors.purple),
                   ),
                 ),
@@ -265,9 +255,84 @@ class _ConfigExperiementsExampleState extends State<ConfigExperiementsExample> {
   }
 }
 
+class PlayerReady extends StatelessWidget {
+  const PlayerReady({
+    super.key,
+    required this.interruptedByInterruptionEventStream,
+    required ja.AudioPlayer player,
+  }) : _player = player;
+
+  final bool interruptedByInterruptionEventStream;
+  final ja.AudioPlayer _player;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        IconButton(
+            icon: Icon(Icons.play_arrow, color: interruptedByInterruptionEventStream ? Colors.red : null),
+            iconSize: 64.0,
+            onPressed: _player.play),
+        IconButton(
+            icon: Icon(Icons.stop),
+            iconSize: 64.0,
+            onPressed: () async {
+              await _player.stop(); //stops and rewinds
+            }),
+      ],
+    );
+  }
+}
+
+class PlayerPlaying extends StatelessWidget {
+  const PlayerPlaying({
+    super.key,
+    required ja.AudioPlayer player,
+  }) : _player = player;
+
+  final ja.AudioPlayer _player;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        IconButton(
+          icon: Icon(Icons.pause),
+          iconSize: 64.0,
+          onPressed: _player.pause,
+        ),
+        IconButton(
+            icon: Icon(Icons.stop),
+            iconSize: 64.0,
+            onPressed: () async {
+              await _player.stop();
+            }),
+      ],
+    );
+  }
+}
+
+class PlayerLoading extends StatelessWidget {
+  const PlayerLoading({
+    super.key,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: EdgeInsets.all(8.0),
+      width: 64.0,
+      height: 64.0,
+      child: CircularProgressIndicator(),
+    );
+  }
+}
+
 enum ASConfig {
-  app_event_alarm(requestsActiveFocus: false), //audio to be mixed with external apps audio
-  tts_voice_over(requestsActiveFocus: true), //external apps audio to be ducked
+  no_focus_example(requestsActiveFocus: false), //audio to be mixed with external apps audio
+  requests_focus_example(requestsActiveFocus: true), //external apps audio to be ducked
   music(requestsActiveFocus: true), //external apps audio to be stopped/paused
   speech(requestsActiveFocus: true); //external apps audio to be stopped/paused
 
@@ -283,7 +348,7 @@ enum ASConfig {
         return AudioSessionConfiguration.music();
       case speech:
         return AudioSessionConfiguration.speech();
-      case ASConfig.app_event_alarm:
+      case ASConfig.no_focus_example:
         return AudioSessionConfiguration(
           //ios
           avAudioSessionCategory: AVAudioSessionCategory.playback,
@@ -302,7 +367,7 @@ enum ASConfig {
           ),
         );
 
-      case ASConfig.tts_voice_over:
+      case ASConfig.requests_focus_example:
         return AudioSessionConfiguration(
           //ios
           avAudioSessionCategory: AVAudioSessionCategory.ambient,
