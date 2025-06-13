@@ -82,7 +82,7 @@ class _ConfigExperiementsExampleState extends State<ConfigExperiementsExample> {
           debugPrint('deactivating audiosession in 2 seconds');
 
           Future.delayed(Duration(seconds: 2), () async {
-            //older iOS devices don't have time for the AVplayer to release the audio session, so this 2 second delay is needed for those devices
+            //older iOS devices (up to at least ios14) don't have time for the AVplayer to release the audio session, so this 2 second delay is needed for those devices
             //similar situation to an old bug relating to deactivating a stopped audio session in audio service - https://github.com/ryanheise/audio_service/issues/672
             //error output:
             //[ERROR:flutter/runtime/dart_vm_initializer.cc(41)] Unhandled Exception: PlatformException(560030580, The operation couldn’t be completed. (OSStatus error 560030580.), null, null)
@@ -181,23 +181,30 @@ class _ConfigExperiementsExampleState extends State<ConfigExperiementsExample> {
               Expanded(
                 child: Center(
                   child: StreamBuilder<ja.PlayerState>(
-                    stream: _player.playerStateStream,
-                    builder: (context, snapshot) {
-                      final playerState = snapshot.data;
+                      stream: _player.playerStateStream,
+                      builder: (context, snapshot) {
+                        final playerState = snapshot.data;
 
-                      if (playerState?.processingState == ja.ProcessingState.buffering ||
-                          playerState?.processingState == ja.ProcessingState.loading) {
-                        return PlayerLoading();
-                      } else if (playerState?.playing == true) {
-                        return PlayerPlaying(player: _player);
-                      } else {
-                        print('playerState?.processingState ${playerState?.processingState}');
-                        return PlayerReady(
-                            interruptedByInterruptionEventStream: interruptedByInterruptionEventStream,
-                            player: _player);
-                      }
-                    },
-                  ),
+                        return Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.all(8.0),
+                              child: Text('Player State: ${playerState?.processingState.name}'),
+                            ),
+                            if (playerState?.processingState == ja.ProcessingState.buffering ||
+                                playerState?.processingState == ja.ProcessingState.loading)
+                              PlayerLoading()
+                            else if (playerState?.playing == true)
+                              PlayerPlaying(player: _player)
+                            else
+                              PlayerReady(
+                                interruptedByInterruptionEventStream: interruptedByInterruptionEventStream,
+                                player: _player,
+                              ),
+                          ],
+                        );
+                      }),
                 ),
               ),
               Slider(
