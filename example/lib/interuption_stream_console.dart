@@ -26,19 +26,30 @@ class InteruptionStreamConsole extends StatefulWidget {
   State<InteruptionStreamConsole> createState() => _InteruptionStreamConsoleState();
 }
 
+
+
 class _InteruptionStreamConsoleState extends State<InteruptionStreamConsole> {
-  bool interruptedByInterruptionEventStream = false;
+  bool mp3PlayerInterrupted = false;
+  bool silencePlayerInterrupted = false;
   final _eventsLog = <String>[];
-  final _player = ja.AudioPlayer(
+  final _mp3UrlPlayer = ja.AudioPlayer(
     // Handle audio_session events ourselves for the purpose of this demo.
     handleInterruptions: false,
     androidApplyAudioAttributes: false,
     handleAudioSessionActivation: false,
   );
 
-  ASConfig _selectedConfiguration = ASConfig.no_focus_example;
+  final _silenceLooper = ja.AudioPlayer(
+    // Handle audio_session events ourselves for the purpose of this demo.
+    handleInterruptions: false,
+    androidApplyAudioAttributes: false,
+    handleAudioSessionActivation: true,
+  );
 
-  double outputVolume = 0.5;
+  ASConfig _selectedConfiguration = ASConfig.no_focus_no_ducking;
+
+  double mp3OutputVolume = 0.5;
+  double silenceOutputVolume = 0.5;
 
   @override
   void initState() {
@@ -48,26 +59,31 @@ class _InteruptionStreamConsoleState extends State<InteruptionStreamConsole> {
 
   Future<void> _initializeAudioSession() async {
     final audioSession = await AudioSession.instance;
-    await audioSession.configure(_selectedConfiguration.configuration);
     _handleInterruptions(audioSession);
-    await _player.setUrl("https://s3.amazonaws.com/scifri-episodes/scifri20181123-episode.mp3");
-    await _player.setVolume(outputVolume);
+    await _mp3UrlPlayer.setUrl("https://s3.amazonaws.com/scifri-episodes/scifri20181123-episode.mp3");
+    await _mp3UrlPlayer.setVolume(mp3OutputVolume);
+
+    await _silenceLooper.setAsset('assets/slow-spring-board.mp3');
+    await _silenceLooper.setVolume(silenceOutputVolume);
+    await _silenceLooper.setLoopMode(ja.LoopMode.one); //loop the silence
+    await _silenceLooper.setAndroidAudioAttributes(ASConfig.no_focus_no_ducking.configuration.androidAudioAttributes!);
   }
 
   void _handleInterruptions(AudioSession audioSession) {
     audioSession.becomingNoisyEventStream.listen((_) {
       addToEventLog('becoming noisy - PAUSE');
-      _player.pause();
+      _mp3UrlPlayer.pause();
     });
 
-    _player.playingStream.listen((playing) {
+    _mp3UrlPlayer.playingStream.listen((playing) {
       if (playing) {
         if (_selectedConfiguration.requestsActiveFocus) {
+          addToEventLog('mp3stream activating audiosession');
           audioSession.setActive(true);
         }
-        if (interruptedByInterruptionEventStream) {
+        if (mp3PlayerInterrupted) {
           setState(() {
-            interruptedByInterruptionEventStream = false;
+            mp3PlayerInterrupted = false;
           });
         }
         //else not playing
@@ -76,17 +92,19 @@ class _InteruptionStreamConsoleState extends State<InteruptionStreamConsole> {
         //this may not be desired behaviour for all apps
         bool shouldDeactivateInAndroidOnPause = false;
         if (Platform.isAndroid) {
-          addToEventLog('deactivating audiosession');
+          addToEventLog('mp3stream deactivating audiosession');
 
           audioSession.setActive(false);
         } else {
-          addToEventLog('deactivating audiosession in 2 seconds');
+          addToEventLog('mp3stream deactivating audiosession in 2 seconds');
 
           Future.delayed(Duration(seconds: 2), () async {
             //older iOS devices (up to at least ios14) don't have time for the AVplayer to release the audio session, so this 2 second delay is needed for those devices
             //similar situation to an old bug relating to deactivating a stopped audio session in audio service - https://github.com/ryanheise/audio_service/issues/672
             //error output:
             //[ERROR:flutter/runtime/dart_vm_initializer.cc(41)] Unhandled Exception: PlatformException(560030580, The operation couldn’t be completed. (OSStatus error 560030580.), null, null)
+            addToEventLog('mp3stream deactivating audiosession');
+
             await audioSession.setActive(false);
           });
         }
@@ -99,38 +117,48 @@ class _InteruptionStreamConsoleState extends State<InteruptionStreamConsole> {
         switch (event.type) {
           case AudioInterruptionType.duck:
             if (audioSession.androidAudioAttributes!.usage == AndroidAudioUsage.game) {
-              _player.setVolume(_player.volume / 2);
+              _mp3UrlPlayer.setVolume(_mp3UrlPlayer.volume / 2);
             }
             break;
           case AudioInterruptionType.pause:
           case AudioInterruptionType.unknown:
-            if (_player.playing) {
-              _player.pause();
+            if (_mp3UrlPlayer.playing) {
+              _mp3UrlPlayer.pause();
               setState(() {
-                interruptedByInterruptionEventStream = true;
+                mp3PlayerInterrupted = true;
               });
             }
+            if (_silenceLooper.playing) {
+              _silenceLooper.pause(); //device player will be paused, so let jaPlayer know its paused too.
+              setState(() {
+                silencePlayerInterrupted = true;
+              });
+            }
+
             break;
         }
       } else {
         switch (event.type) {
           case AudioInterruptionType.duck:
-            _player.setVolume(min(1.0, _player.volume * 2));
+            _mp3UrlPlayer.setVolume(min(1.0, _mp3UrlPlayer.volume * 2));
             break;
           case AudioInterruptionType.pause:
-            if (interruptedByInterruptionEventStream) {
-              _player.play();
-              setState(() {
-                interruptedByInterruptionEventStream = false;
-              });
-            }
-            break;
           case AudioInterruptionType.unknown:
-            if (interruptedByInterruptionEventStream) {
+            if (mp3PlayerInterrupted) {
+              _mp3UrlPlayer.play();
+               audioSession.configure(_selectedConfiguration.configuration);
+
               setState(() {
-                interruptedByInterruptionEventStream = false;
+                mp3PlayerInterrupted = false;
               });
             }
+            if (silencePlayerInterrupted) {
+              _silenceLooper.play();
+              setState(() {
+                silencePlayerInterrupted = false;
+              });
+            }
+
             break;
         }
       }
@@ -144,7 +172,8 @@ class _InteruptionStreamConsoleState extends State<InteruptionStreamConsole> {
 
   void addToEventLog(String event) {
     final time = DateTime.now();
-    final formattedTime = '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}:${time.second.toString().padLeft(2, '0')}';
+    final formattedTime =
+        '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}:${time.second.toString().padLeft(2, '0')}';
     setState(() {
       _eventsLog.add('$formattedTime $event');
     });
@@ -186,55 +215,62 @@ class _InteruptionStreamConsoleState extends State<InteruptionStreamConsole> {
                           _selectedConfiguration = value;
                         });
 
-                        _initializeAudioSession(); //reinitialize the audio session with the new listener configuration
-                        // final audioSession = await AudioSession.instance;
-                        // await audioSession.configure(_selectedConfiguration.configuration);
+                        // _initializeAudioSession(); //reinitialize the audio session with the new listener configuration
+                        final audioSession = await AudioSession.instance;
+                        await audioSession.configure(_selectedConfiguration.configuration);
                       }
                     },
                   ),
                 ],
               ),
-              Center(
-                child: StreamBuilder<ja.PlayerState>(
-                    stream: _player.playerStateStream,
-                    builder: (context, snapshot) {
-                      final playerState = snapshot.data;
-
-                      return Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  PlayerControls(
+                      title: 'mp3 url',
+                      player: _mp3UrlPlayer,
+                      interruptedByInterruptionEventStream: mp3PlayerInterrupted,
+                  ),
+                  Column(
+                    children: [
+                      PlayerControls(
+                          title: 'silence looper',
+                          player: _silenceLooper,
+                          interruptedByInterruptionEventStream: mp3PlayerInterrupted),
+                      Row(
                         children: [
-                          Padding(
-                            padding: const EdgeInsets.all(8.0),
-                            child: Column(
-                              children: [
-                                Text('Player State: ${playerState?.processingState.name}'),
-                                Text('Player Playing: ${playerState?.playing}'),
-                              ],
-                            ),
+                          Icon(silenceOutputVolume == 0 ? Icons.volume_mute : Icons.volume_up),
+                          Switch(
+                            value: silenceOutputVolume != 0,
+                            onChanged: (value) {
+                              setState(() {
+                                if (value) {
+                                  silenceOutputVolume = 0.5;
+                                  _silenceLooper.setVolume(silenceOutputVolume);
+                                } else {
+                                  silenceOutputVolume = 0;
+                                  _silenceLooper.setVolume(silenceOutputVolume);
+                                }
+                              });
+                            },
                           ),
-                          if (playerState?.processingState == ja.ProcessingState.buffering ||
-                              playerState?.processingState == ja.ProcessingState.loading)
-                            PlayerLoading()
-                          else if (playerState?.playing == true)
-                            PlayerPlaying(player: _player)
-                          else
-                            PlayerReady(
-                              interruptedByInterruptionEventStream: interruptedByInterruptionEventStream,
-                              player: _player,
-                            ),
                         ],
-                      );
-                    }),
+                      ),
+                    ],
+                  ),
+                ],
               ),
               Center(
                 child: Padding(
                   padding: const EdgeInsets.all(8.0),
                   child: Text(
-                    'Interrupted from interruptionEventStream?: $interruptedByInterruptionEventStream',
+                    'Interrupted from interruptionEventStream?: $mp3PlayerInterrupted',
                     style: TextStyle(color: Colors.purple),
                   ),
                 ),
               ),
+              Divider(),
               TextButton(
                 onPressed: () async {
                   clearEventLog();
@@ -244,28 +280,77 @@ class _InteruptionStreamConsoleState extends State<InteruptionStreamConsole> {
               Expanded(
                 child: Container(
                   color: Colors.grey,
-                  child:
-                  _eventsLog.isEmpty
+                  child: _eventsLog.isEmpty
                       ? Center(child: Text('No events logged yet'))
-                      :
-                  ListView.builder(
-                    itemCount: _eventsLog.length,
-                    itemBuilder: (context, index) {
-                      return Padding(
-                        padding: const EdgeInsets.all(8.0),
-                        child: Text(_eventsLog[index]),
-                      );
-                    },
-                  ),
-                
-                
+                      : ListView.builder(
+                          itemCount: _eventsLog.length,
+                          itemBuilder: (context, index) {
+                            return Padding(
+                              padding: const EdgeInsets.all(8.0),
+                              child: Text(_eventsLog[index]),
+                            );
+                          },
+                        ),
                 ),
               ),
-
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+class PlayerControls extends StatelessWidget {
+  const PlayerControls({
+    super.key,
+    required ja.AudioPlayer player,
+    required this.interruptedByInterruptionEventStream,
+    required String this.title,
+  }) : _player = player;
+
+  final ja.AudioPlayer _player;
+  final bool interruptedByInterruptionEventStream;
+
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Center(child: Text(title)),
+        StreamBuilder<ja.PlayerState>(
+            stream: _player.playerStateStream,
+            builder: (context, snapshot) {
+              final playerState = snapshot.data;
+
+              return Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: Column(
+                      children: [
+                        Text('Player State: ${playerState?.processingState.name}'),
+                        Text('Player Playing: ${playerState?.playing}'),
+                      ],
+                    ),
+                  ),
+                  if (playerState?.processingState == ja.ProcessingState.buffering ||
+                      playerState?.processingState == ja.ProcessingState.loading)
+                    PlayerLoading()
+                  else if (playerState?.playing == true)
+                    PlayerPlaying(
+                        interruptedByInterruptionEventStream: interruptedByInterruptionEventStream, player: _player)
+                  else
+                    PlayerReady(
+                      interruptedByInterruptionEventStream: interruptedByInterruptionEventStream,
+                      player: _player,
+                    ),
+                ],
+              );
+            }),
+      ],
     );
   }
 }
@@ -304,9 +389,12 @@ class PlayerPlaying extends StatelessWidget {
   const PlayerPlaying({
     super.key,
     required ja.AudioPlayer player,
+    required this.interruptedByInterruptionEventStream,
   }) : _player = player;
 
   final ja.AudioPlayer _player;
+
+  final bool interruptedByInterruptionEventStream;
 
   @override
   Widget build(BuildContext context) {
@@ -314,7 +402,7 @@ class PlayerPlaying extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         IconButton(
-          icon: Icon(Icons.pause),
+          icon: Icon(Icons.pause, color: interruptedByInterruptionEventStream ? Colors.red : null),
           iconSize: 64.0,
           onPressed: _player.pause,
         ),
@@ -346,8 +434,8 @@ class PlayerLoading extends StatelessWidget {
 }
 
 enum ASConfig {
-  no_focus_example(requestsActiveFocus: false), //audio to be mixed with external apps audio
-  player_requests_focus(requestsActiveFocus: true), //external apps audio to be ducked
+  no_focus_no_ducking(requestsActiveFocus: false), //audio to be mixed with external apps audio
+  duck_or_interupt_spoken(requestsActiveFocus: true), //external apps audio to be ducked
   music(requestsActiveFocus: true), //external apps audio to be stopped/paused
   speech(requestsActiveFocus: true); //external apps audio to be stopped/paused
 
@@ -363,7 +451,7 @@ enum ASConfig {
         return AudioSessionConfiguration.music();
       case speech:
         return AudioSessionConfiguration.speech();
-      case ASConfig.no_focus_example:
+      case ASConfig.no_focus_no_ducking:
         return AudioSessionConfiguration(
           //ios
           avAudioSessionCategory: AVAudioSessionCategory.playback,
@@ -373,8 +461,8 @@ enum ASConfig {
           avAudioSessionSetActiveOptions: AVAudioSessionSetActiveOptions.notifyOthersOnDeactivation,
           //android
 
-
-          androidAudioFocusGainType: AndroidAudioFocusGainType.gain,//default is gain
+          androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+          //default is gain
           //note - gaintype is effectively ignored as no_focus_example will not request active focus
           androidWillPauseWhenDucked: false,
           androidAudioAttributes: AndroidAudioAttributes(
@@ -384,11 +472,13 @@ enum ASConfig {
           ),
         );
 
-      case ASConfig.player_requests_focus:
+      case ASConfig.duck_or_interupt_spoken:
         return AudioSessionConfiguration(
           //ios
           avAudioSessionCategory: AVAudioSessionCategory.ambient,
-          avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.duckOthers,
+          avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.duckOthers |
+              AVAudioSessionCategoryOptions.interruptSpokenAudioAndMixWithOthers,
+          //ducks music, interrupts spoken audio
           avAudioSessionMode: AVAudioSessionMode.spokenAudio,
           avAudioSessionRouteSharingPolicy: AVAudioSessionRouteSharingPolicy.defaultPolicy,
           avAudioSessionSetActiveOptions: AVAudioSessionSetActiveOptions.notifyOthersOnDeactivation,
